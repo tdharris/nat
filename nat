@@ -350,7 +350,7 @@ function showHelp {
 
 function checkStuff {
 	# Check current directory against build.xml
-	if [ ! -e "$file" ]; then
+	if [[ $(ls -1 *.xml 2>/dev/null | wc -l | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//') < 1 ]]; then
 		echo "$file not found!"
 		if askYesOrNo "Do you want to generate a build.xml?"; then
 			newBuildXML
@@ -362,7 +362,7 @@ function checkStuff {
 
 function createNewTestFile {
 	# Create a new test case file
-	if [ ! -e "$file" ]; then
+	if [[ $(ls -1 *.xml 2>/dev/null | wc -l | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//') < 1 ]]; then
 		echo "$file not found!"
 		if askYesOrNo "Do you want to generate a build.xml?"; then
 			newBuildXML
