@@ -1,0 +1,511 @@
+#!/bin/sh
+
+# A POSIX variable
+OPTIND=1         # Reset in case getopts has been used previously in the shell.
+
+# My variables:
+script_dir=$(dirname $0)
+script_dir_windows=$(dirname $0 | cut -c 3-)
+file="./build.xml"
+bak="$file"".bak"
+
+# Colors
+	bRED='\e[1;31m' #Bold Red
+	red='\e[31m' # Red
+	green='\e[0;32m' # Green
+	bGREEN='\e[1;32m' #Bold Green
+	yellow='\e[33m' #Yellow
+	bYELLOW='\e[1;33m'
+	URED='\e[4;91m' #Underline Red
+	UGREEN='\e[4;92m' #Underline Green
+	BOLD='\e[1m'  #Bold
+	NC='\e[0m' # No Color - default
+
+function newTargetIndex {
+	targetName=$(echo "$1" | sed -e 's/^./\L&\E/')
+	insertContentIntoSection "<target .* description *." "</target>" "\t\t<antcall target=\"$targetName\" />\n"
+}
+
+function newTargetSection {
+	propertyName=$(awk -F "[\"]" '/property name=\"/{print $2}' "$file")
+	targetName=$(echo "$1" | sed -e 's/^./\L&\E/')
+	content='\n\t<target name="'"$targetName"'" depends="compile" >
+		<junit printsummary="yes" fork="true" errorproperty="JUnit.error" failureproperty="JUnit.error">
+			<sysproperty key="selenium.testplan" value="\${TEST_PLAN}"/>
+			<sysproperty key="selenium.testbuild" value="\${TEST_BUILD}"/>
+			<sysproperty key="selenium.system" value="\${SYSTEMCONFIG}"/>
+			<sysproperty key="selenium.browser" value="\${BROWSER}"/>
+			<sysproperty key="selenium.language" value="\${LANG}"/>
+			<classpath refid="JUnit.class.path" />
+			<formatter type="xml" />
+			<test todir="\${outputresults\}" name="\${'"$propertyName"'}.'"$1"'" />
+		</junit>
+		<antcall target="report-JUnit"/>
+	</target>\n'
+
+	insertContentIntoSection "<project name" "</project>" "$content"
+}
+
+function insertContentIntoSection {
+	# @param $1 = search for opening tag
+	# @param $2 = closing xml tag to insert just before
+	# @param $3 = content to append
+
+	perl -pi.orig -e ' $inside = 1 if /'"$1"'/;
+		print qq('"$3"') if $inside and m{'"$2"'};
+		$inside = 0 if m{'"$2"'};
+		' "$file"
+	if [ $? -ne 0 ]; then
+		echo "Problem appending XML content: $1, $2, $3, $file"
+		exit 1
+	fi
+}
+
+function newTarget {
+
+	if [ -z "$1" ]; then
+		read -p "Java Filename: " javaFilename
+	else
+		javaFilename="$1"
+	fi
+
+	if [ -z "$javaFilename" ]; then
+		echo "Java Filename is required."
+		exit 1;
+	else
+		cp "$file" "$bak"
+		newTargetIndex "$javaFilename"
+		newTargetSection "$javaFilename"
+
+		if [ $? -eq 0 ]; then
+			rm "$file.orig" 2>/dev/null
+
+			echo -e "${bYELLOW}./build.xml${NC} contents:\n"
+			cat -n "$file"
+
+			echo -e "\n\n\ttargetName: ${green}$targetName${NC}"
+			echo -e "\tpropertyName: ${green}$propertyName${NC}"
+			echo -e "\tFilename: ${yellow}$file${NC}"
+
+			if askYesOrNo "Does the above look correct?"; then
+				rm "$bak" 2>/dev/null
+				echo -e "\nCreated new ant target successfully!"
+			else 
+				askToEditFileOrRestoreBackup
+			fi
+		else 
+			rm "$file.orig" 2>/dev/null
+			echo "Problem creating newTarget!"
+			exit 1
+		fi
+	fi
+}
+
+function findFileRecursivelyBackwards {
+	# @param $1 - filename
+	sad=true;
+	while ($sad); do
+		find "$1" &>/dev/null
+		if [ $? -ne 0 ]; then
+			cd ..
+		else 
+			echo ${PWD}"/$1"
+			sad=false;
+		fi
+	done
+}
+
+function findFolderRecursivelyBackwards {
+	# @param $1 - folder
+	folder="$(basename "$1")"
+	sad=true;
+	while ($sad); do
+		find "$1" &>/dev/null
+		if [ "$folder" == "/" ]; then
+			echo "Unable to find $1"
+		elif [ "$folder" != "$(basename ${PWD})" ]; then
+			cd ..
+		else 
+			echo ${PWD}
+			sad=false;
+		fi
+	done
+}
+
+function relpath() {
+    # both $1 and $2 are absolute paths beginning with /
+    # $1 must be a canonical path; that is none of its directory
+    # components may be ".", ".." or a symbolic link
+    #
+    # returns relative path to $2/$target from $1/$source
+    source=$1
+    target=$2
+
+    common_part=$source
+    result=
+
+    while [ "${target#"$common_part"}" = "$target" ]; do
+        # no match, means that candidate common part is not correct
+        # go up one level (reduce common part)
+        common_part=$(dirname "$common_part")
+        # and record that we went back, with correct / handling
+        if [ -z "$result" ]; then
+            result=..
+        else
+            result=../$result
+        fi
+    done
+
+    if [ "$common_part" = / ]; then
+        # special case for root (no common path)
+        result=$result/
+    fi
+
+    # since we now have identified the common part,
+    # compute the non-common part
+    forward_part=${target#"$common_part"}
+
+    # and now stick all parts together
+    if [ -n "$result" ] && [ -n "$forward_part" ]; then
+        result=$result$forward_part
+    elif [ -n "$forward_part" ]; then
+        # extra slash removal
+        result=${forward_part#?}
+    fi
+
+    printf '%s\n' "$result"
+}
+
+function initProject {
+	echo -e "\nInitializing project: attempting to find project base..."
+	buildMain="$(findFileRecursivelyBackwards "buildMain.xml")"
+	projectBase="$(dirname $buildMain)"
+	projectBuildXML="$projectBase/build.xml"
+
+	function getPropertyValue {
+		# @param $1 - base folder ("src")
+		src="$(findFolderRecursivelyBackwards "src")"
+		echo "${PWD#"$src"}" | sed -e 's/^\///' | sed -e 's/\//./g'
+	}
+	
+	function getPropertyName {
+		# @dependency $propertyValue
+		propertyName=$(echo "$propertyValue" | sed 's/.test//' | sed 's/\.\s*./\U&\E/g' | tr -d '.')
+		echo "$propertyName""Package"
+	}
+
+	function getProjectDefault {
+		# @dependecy $propertyValue
+		projectDefault=$(echo "$propertyValue" | sed 's/.*test.//' | sed 's/\.\s*./\U&\E/g' | tr -d '.')
+		echo "$projectDefault"
+	}
+
+	function getImportFile {
+		# Create the import statement for the first project level build.xml
+		# <import file="${lmp_builds}/acceptance/buildAcceptance.xml" />
+		buildPart=$(echo "$propertyValue" | cut -d '.' -f 1)
+		buildName=$(echo "$buildPart""_builds")
+		pathToLocalBuild=$(echo "$propertyValue" | perl -p -e 's/^.*?test//' | sed 's/[.]/\//g')
+		localBuild=$(echo "$pathToLocalBuild/build.xml")
+		importFile=$(echo "<import file=\"\${$buildName}$localBuild\" />")
+	}
+
+	function updateProjectBuildXML {
+		# Make a backup
+		projectBuildXMLBak="$projectBuildXML.bak"
+		cp "$projectBuildXML" "$projectBuildXMLBak"
+
+		getImportFile
+		echo -e "\nAdd the following line to the project level build.xml:\n$importFile"
+		notepad "$projectBuildXML"
+		if (askYesOrNo "Keep your changes?"); then
+			rm "$projectBuildXMLBak" 2>/dev/null
+		else
+			echo -e "\nRestoring backup:"
+			mv -v "$projectBuildXMLBak" "$projectBuildXML"
+			echo -e "\nRemember to add the build.xml path to the main project build.xml!"
+		fi
+	}
+
+	propertyValue=$(getPropertyValue)
+	propertyName=$(getPropertyName)
+	projectDefault=$(getProjectDefault)
+	importFile=$(relpath "${PWD}" "$buildMain")
+	echo -e "\n\tpwd:\t\t${PWD}\n\tprojectBase:\t$projectBase\n\n\timportFile:\t${yellow}$importFile${NC}\n\tpropertyValue:\t${green}$propertyValue${NC}\n\tpropertyName:\t${green}$propertyName${NC}\n\tprojectDefault:\t${green}$projectDefault${NC}"
+
+}
+
+function newBuildXML {
+	echo
+	read -p "Project Name Description (i.e. Run SF AdditionalSettings Tests): " projectName
+	initProject
+	# Generate build.xml
+	content='<?xml version="1.0"?>
+
+<project name="'"$projectName"'" default="'"$projectDefault"'" basedir=".">
+
+	<property name="'"$propertyName"'" value="'"$propertyValue"'" />
+	<import file="'"$importFile"'" />
+
+	<!-- '"$projectDefault Tests"' -->
+	<target name="'"$projectDefault"'" depends="compile" description="'"$projectName"'" >
+	</target>
+</project>'
+
+	echo "$content" > "$file"
+	echo -e "\n${bYELLOW}$file${NC} contents:\n"
+	cat -n "$file"
+	if askYesOrNo "Does the above look correct?"; then
+		rm "$bak" 2>/dev/null
+		echo -e "\n$file generated successfully."
+		updateProjectBuildXML
+	else 
+		if askYesOrNo "Do you want to edit this file?"; then
+			unix2dos "$file" &>/dev/null
+			notepad "$file"
+			if (askYesOrNo "Keep your changes?"); then
+				updateProjectBuildXML
+			else 
+				restoreBackupOfBuildXML
+			fi
+		else
+			rm "$file"
+		fi
+	fi
+	
+}
+
+function createBackupOfBuildXML {
+	cp "$file" "$bak"
+}
+
+function restoreBackupOfBuildXML {
+	echo -e "\nRestoring backup of $file:"
+	mv -v "$bak" "$file"
+}
+
+function askToEditFileOrRestoreBackup {
+	if askYesOrNo "Do you want to edit this file?"; then
+		unix2dos "$file" &>/dev/null
+		notepad "$file"
+		if (askYesOrNo "Keep your changes?"); then
+			rm "$bak" 2>/dev/null
+		else
+			restoreBackupOfBuildXML
+		fi
+	else
+		restoreBackupOfBuildXML
+	fi
+}
+
+function launchUpdateProjectBuildXML {
+	initProject
+	updateProjectBuildXML
+}
+
+function checkCurrentDirectory {
+	for filename in $(ls *.java 2>/dev/null); do
+		javaFilename="${filename%.*}"
+		grep "$javaFilename" "$file" >/dev/null
+		if [ $? -ne 0 ]; then
+			if askYesOrNo "$javaFilename is missing from $file, do you want to append it?"; then
+				newTarget "$javaFilename"
+			fi
+		fi
+	done
+}
+
+function askYesOrNo {
+	# If $2 = "skip" Will default return 0;
+	echo
+	if [ "$2" = "skip" ];then return 0; fi
+		REPLY=""
+		while [ -z "$REPLY" ] ; do
+			read -ep "$1 $YES_NO_PROMPT" -n1 REPLY
+			REPLY=$(echo ${REPLY}|tr [:lower:] [:upper:])
+			case $REPLY in
+				$YES_CAPS ) return 0 ;;
+				$NO_CAPS ) return 1 ;;
+				* ) REPLY=""
+			esac
+		done
+}
+
+# Initialize the yes/no prompt
+YES_STRING=$"y"
+NO_STRING=$"n"
+YES_NO_PROMPT=$"[y/n]: "
+YES_CAPS=$(echo ${YES_STRING}|tr [:lower:] [:upper:])
+NO_CAPS=$(echo ${NO_STRING}|tr [:lower:] [:upper:])
+
+function showHelp {
+	echo -e "\nnat.sh CLI Options:\n\n\t-h\tShow Help\n\t-c\tCheck current directory for missing targets\n\t-u\tUpdate nat.sh\n\t-f\tNew Ant Target Entry in ./$file (@param filename)\n\t-F\tNew $file (new Folder)"
+}
+
+###############################################
+#
+#	Option Functions (CLI)
+#
+###############################################
+
+function checkStuff {
+	# Check current directory against build.xml
+	if [ ! -e "$file" ]; then
+		echo "$file not found!"
+		if askYesOrNo "Do you want to generate a build.xml?"; then
+			newBuildXML
+		fi
+	else
+		checkCurrentDirectory
+	fi
+}
+
+function createNewTestFile {
+	# Create a new test case file
+	if [ ! -e "$file" ]; then
+		echo "$file not found!"
+		if askYesOrNo "Do you want to generate a build.xml?"; then
+			newBuildXML
+		fi
+		exit 1;
+	else
+		newTarget
+		checkCurrentDirectory
+	fi
+}
+
+function createNewFolderBuildXML {
+	# Create a new build.xml for a new Folder
+	if [ -f "./build.xml" ]; then
+		echo "./build.xml file already exists."
+	else
+		newBuildXML
+		checkCurrentDirectory
+	fi
+}
+
+function update {
+	# Update
+	command=$(echo 'Copy-Item \\\\10.0.30.51\\share\\nat '"$script_dir_windows"' >$null')
+	#  $script_dir_windows"' >$null'
+	echo -ne "\nUpdating nat.sh:\n"
+	echo -ne "powershell $command"
+	powershell -Command "$command"
+	if [ $? -eq 0 ]; then
+		echo -e "\nSuccessfully updated!"
+	else
+		echo "\nFailed to update."
+	fi
+}
+
+function newTemplate {
+	# New Test File / Data File
+		dataDir="/c/Users/tyler.harris/dev/is/qaautosalesforce/data/en"
+
+		read -p "Name of new test file: " filename
+		read -p "isqa #: " testNum
+
+		className=$(echo "$filename" | cut -d'.' -f1)
+
+		dataTemplate="{
+    \"tests\": [
+	    {
+	        \"testCase\": [\"isqa-$testNum\"]
+	    }
+    ]
+}"
+		
+		testTemplate="package sf.test.telephony.us.transfers.warm;
+
+import java.util.Collection;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.junit.After;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+import org.junit.runners.Parameterized.Parameters;
+
+import sf.test.TestBase;
+
+@RunWith(Parameterized.class)
+public class $className extends TestBase
+{
+
+   public $className(String _data)
+   {
+       try
+       {
+    	   	JSONObject json = new JSONObject(_data);
+    	   	testCase = json.getJSONArray(\"testCase\");
+    	   	
+       } catch (JSONException e)
+       {
+              e.printStackTrace();
+       }
+   }
+   
+   @Parameters
+   public static Collection<String[]> data()
+   {
+	   return TestBase.data(\"ui_\" + $className.class.getSimpleName() + \".json\", \"ui_\" + $className.class.getSimpleName(), \"/\");
+   }
+
+   @After
+   public void tearDown()
+   {
+	   
+   }
+   
+   @Test
+   public void test$className()
+   {
+	   
+   }
+}"
+		
+		echo "$dataTemplate" > "$dataDir/ui_$className.json"
+		echo "$testTemplate" > "./$className.java"
+}
+
+###############################################
+#
+#	Available CLI Options
+#
+###############################################
+
+while getopts "h?:cFfun" opt; do
+    case "$opt" in
+    h|\?)
+		# echo "$@ is not a valid option"
+        showHelp
+        exit 0
+        ;;
+
+    c) checkStuff
+		;;
+
+    f) createNewTestFile
+		;;
+
+    F) createNewFolderBuildXML
+		;;
+    
+    u) update
+		;;
+
+	n) newTemplate
+		;;
+    esac
+done
+
+if [ $OPTIND -eq 1 ]; then 
+	checkStuff
+fi
+
+shift $((OPTIND-1))
+
+[ "$1" = "--" ] && shift
+
+# End of file
