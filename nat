@@ -8,6 +8,9 @@ script_dir=$(dirname $0)
 script_dir_windows=$(dirname $0 | cut -c 3-)
 #file="./build.xml"
 file=$(ls *.xml 2>/dev/null | head -n1)
+if [ -z "$file" ]; then
+	file="build.xml"
+fi
 bak="$file"".bak"
 echo "$file"
 
