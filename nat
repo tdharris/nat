@@ -12,7 +12,7 @@ if [ -z "$file" ]; then
 	file="build.xml"
 fi
 bak="$file"".bak"
-echo "$file"
+#echo "$file"
 
 # Colors
 	bRED='\e[1;31m' #Bold Red
@@ -336,6 +336,43 @@ function askYesOrNo {
 		done
 }
 
+function findTestById {
+	# $1 - isqa#
+	if [ -z "$1" ]; then
+		read -p "Test-case id: " id
+	else id="$1"
+	fi
+
+	dataEn="./data/en"
+	search="isqa-$id"
+
+	echo -e "\nSearching for $search in test files..."
+	results=$(grep -r "$search" src)
+	if [ -z "$results" ]; then
+		echo "No results found."
+	else
+		echo -e "Found the following test files:"
+		echo "$results"
+	fi
+
+	echo -e "\nSearching for $search in data files..."
+	results=$(grep -nrl "$id" "$dataEn")
+	if [ -z "$results" ]; then
+		echo "No results found."
+	else
+		echo -e "Found the following data files:"
+		echo -e "$results"
+
+		echo -e "\nFound the corresponding test files:"
+		parsedResults=$(echo "$results"  | xargs -n 1 basename | awk -F'_' '{print $2}' | awk -F'.' '{print $1}')
+		files=$(find src -name *.java)
+		for file in `echo "$parsedResults"`
+		do
+			echo "$files" | grep "$file" 
+		done
+	fi	
+}
+
 # Initialize the yes/no prompt
 YES_STRING=$"y"
 NO_STRING=$"n"
@@ -480,7 +517,7 @@ public class $className extends TestBase
 #
 ###############################################
 
-while getopts "h?:cFfun" opt; do
+while getopts "h?:cFfuns" opt; do
     case "$opt" in
     h|\?)
 		# echo "$@ is not a valid option"
@@ -502,6 +539,10 @@ while getopts "h?:cFfun" opt; do
 
 	n) newTemplate
 		;;
+
+	s) findTestById "$2"
+		;;
+
     esac
 done
 

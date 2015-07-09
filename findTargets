@@ -1,0 +1,8 @@
+#!/bin/sh
+files=$(find . -type f -name *.xml)
+
+for file in $files
+do
+  grep -i "target" $file 2>/dev/null | head -n1 | awk -F'"' '{print$2}'
+done
+exit 0
