@@ -4,7 +4,7 @@
 OPTIND=1         # Reset in case getopts has been used previously in the shell.
 
 # My variables:
-script_dir=$(dirname $0)
+script_dir=$(dirname "$0")
 script_dir_windows=$(dirname $0 | cut -c 3-)
 #file="./build.xml"
 file=$(ls *.xml 2>/dev/null | head -n1)
@@ -336,6 +336,66 @@ function askYesOrNo {
 		done
 }
 
+function runTestMultipleTimes {
+
+	# Verify in main target directory
+	if [ ! -f "buildMain.xml" ]; then 
+		echo "Not in the main repository directory."
+		break 1;
+	fi
+
+	read -p "Target Name: " targetName
+	read -p "How many times? " numTimes
+
+	# Create .csv file for report
+	csv="$script_dir/results/nat_report.csv"
+	log="$script_dir/results/nat_ant.log"
+	results="$script_dir/results/nat_currentRun.log"
+
+	rm "$log" 2>/dev/null; touch "$log"
+	rm "$csv" 2>/dev/null; touch "$csv"
+	echo -e "target,n,tests run,failures,errors,time" > "$csv"
+	if [ $? -ne 0 ]; then
+		echo "File might be open."
+		exit 1;
+	fi
+
+	# Run test numTimes & log results
+	while (( n++ < numTimes )) 
+	do 
+		echo -e "\nExecuting test run: $n"
+		echo -e "\nExecuting test run: $n" >> "$log"
+		ant "$targetName" &> "$results"
+		status=$?
+
+		junit_results=$(cat "$results" | awk '/run:/')
+		junit_log=$(cat "$results" | awk '/Copying/' | sed -ne 's/.*to //p')
+		notes=""
+
+		# if [ $status -ne 0 ]; then
+		# 	# Go get error
+		# 	echo ""
+		# fi
+
+		# Results
+		testsRun=$(echo "$junit_results" | cut -d ':' -f2 | awk -F "," '{print $1}')
+		failures=$(echo "$junit_results" | cut -d ':' -f3 | awk -F "," '{print $1}')
+		errors=$(echo "$junit_results" | cut -d ':' -f4 | awk -F "," '{print $1}')
+		timeElapsed=$(echo "$junit_results" | cut -d ':' -f5 | awk -F "," '{print $1}' | sed -n 's/sec//p')
+
+		echo -e "junit results: $junit_results"
+		#echo -e "junit log: $junit_log"
+		#echo -e "Notes: $notes"
+
+		echo -e "$targetName,$n,$testsRun,$failures,$errors,$timeElapsed" >> "$csv"
+		cat "$results" >> "$log"
+		rm "$results" 2>/dev/null
+
+	done
+
+	echo "$junit_log" >> "$csv"
+}
+
 function findTestById {
 	# $1 - isqa#
 	if [ -z "$1" ]; then
@@ -517,7 +577,7 @@ public class $className extends TestBase
 #
 ###############################################
 
-while getopts "h?:cFfuns" opt; do
+while getopts "h?:cFfunsr" opt; do
     case "$opt" in
     h|\?)
 		# echo "$@ is not a valid option"
@@ -541,6 +601,9 @@ while getopts "h?:cFfuns" opt; do
 		;;
 
 	s) findTestById "$2"
+		;;
+
+	r) runTestMultipleTimes
 		;;
 
     esac
