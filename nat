@@ -240,6 +240,48 @@ function initProject {
 
 }
 
+function fixImportMainBuildXML {
+	
+	currentDirectory=$(pwd)
+
+	# Find files and fix the line
+	for file in $(find . -name *.xml)
+	do
+		dir=$(dirname "$file")
+		basefile=$(basename "$file")
+		cd "$dir"
+		#echo -e "\nInitializing project: attempting to find project base..."
+		buildMain="$(findFileRecursivelyBackwards "buildMain.xml")"
+		projectBase="$(dirname $buildMain)"
+
+		function getPropertyValue {
+			# @param $1 - base folder ("src")
+			src="$(findFolderRecursivelyBackwards "src")"
+			echo "${PWD#"$src"}" | sed -e 's/^\///' | sed -e 's/\//./g'
+		}
+
+		function getImportFile {
+			# Create the import statement for the first project level build.xml
+			# <import file="${lmp_builds}/acceptance/buildAcceptance.xml" />
+			buildPart=$(echo "$propertyValue" | cut -d '.' -f 1)
+			buildName=$(echo "$buildPart""_builds")
+			pathToLocalBuild=$(echo "$propertyValue" | perl -p -e 's/^.*?test//' | sed 's/[.]/\//g')
+			localBuild=$(echo "$pathToLocalBuild/build.xml")
+			importFile=$(echo "<import file=\"\${$buildName}$localBuild\" />")
+		}
+
+		propertyValue=$(getPropertyValue)
+		importFile=$(relpath "${PWD}" "$buildMain")
+		echo "$file"
+		echo "$basefile"
+		echo "$importFile"
+		importFile=$(echo -e "\t<import file=\"$importFile\" />")
+		sed -i "s|.*import file.*|$importFile|" "$basefile"
+		grep "import file" "$basefile"
+		cd "$currentDirectory"
+	done
+}
+
 function newBuildXML {
 	echo
 	read -p "Project Name Description (i.e. Run SF AdditionalSettings Tests): " projectName
@@ -405,21 +447,24 @@ function findTestById {
 
 	dataEn="./data/en"
 	search="isqa-$id"
+	foundSomething=1
 
 	echo -e "\nSearching for $search in test files..."
 	results=$(grep -r "$search" src)
 	if [ -z "$results" ]; then
 		echo "No results found."
 	else
+		foundSomething=0
 		echo -e "Found the following test files:"
 		echo "$results"
 	fi
 
 	echo -e "\nSearching for $search in data files..."
-	results=$(grep -nrl "$id" "$dataEn")
+	results=$(grep -nrl "put([\'||\"]$id[\'||\"])" "$dataEn")
 	if [ -z "$results" ]; then
 		echo "No results found."
 	else
+		foundSomething=0
 		echo -e "Found the following data files:"
 		echo -e "$results"
 
@@ -428,9 +473,16 @@ function findTestById {
 		files=$(find src -name *.java)
 		for file in `echo "$parsedResults"`
 		do
-			echo "$files" | grep "$file" 
+			echo "$files" | grep "$file" 2>/dev/null;
+			if [ $? -ne 0 ]; then
+				echo "No results found."
+			else
+				foundSomething=0
+			fi
 		done
 	fi	
+		
+	exit $foundSomething
 }
 
 # Initialize the yes/no prompt
@@ -571,13 +623,85 @@ public class $className extends TestBase
 		echo "$testTemplate" > "./$className.java"
 }
 
+function getTargets {
+
+	rm "results.csv" 2>/dev/null
+	touch "results.csv"
+	files=$(find "$(cd ..; pwd)" -name "*.xml")
+	echo "$files" | while read file
+	do
+		echo "$file"
+		gitStuff=$(git log -1 --pretty=format:"%cr,%h,%s,%cn" "$file")
+		results=`grep -B 11 "test todir" "$file" | cut -d '"' -f2,4 | grep -E 'compile|outputresults'`
+		echo "$results" | while read line
+		do
+			#name=""
+			#testFile=""
+			a=false;
+
+			echo "$line" | grep "compile" &>/dev/null
+			if [ $? -eq 0 ]; then
+				name=$(echo "$line" | cut -d '"' -f1)
+				name="<antcall target=\"$name\" />"
+				#echo -e "Target Name:\t$name"
+			else
+				placeholder=$(echo "$line" | tr '.' '\n' | tail -1)
+				path=$(dirname $file)
+				testFile=$(echo "$path/$placeholder" | sed 's/.*src/src/' | sed 's/test.test/test/' | sed 's|/|.|g')
+				a=true;
+				#echo -e "filePath:\t$(pwd)/$testFile.java"
+			fi
+
+			if ($a); then
+				echo -e "$name,$testFile.java,$gitStuff" >> "results.csv"
+				echo -e "\t $name,$testFile.java,$gitStuff"
+				name=""
+				testFile=""
+			fi
+			#echo "$name:$testFile"
+
+		done
+
+	done
+
+}
+
+function convertJavaToGroovy {
+
+	className=$($filename | cut -d'.' -f1)
+
+	echo "
+
+
+class $className extends SpecBase {
+
+	def ""() {
+		setup:
+		
+
+		when/then stuffs
+
+
+		cleanup:
+
+	}
+
+
+}
+
+	"
+
+
+
+}
+
 ###############################################
 #
 #	Available CLI Options
 #
 ###############################################
 
-while getopts "h?:cFfunsr" opt; do
+while getopts "h?:cFfunsrzx" opt; do
     case "$opt" in
     h|\?)
 		# echo "$@ is not a valid option"
@@ -604,6 +728,12 @@ while getopts "h?:cFfunsr" opt; do
 		;;
 
 	r) runTestMultipleTimes
+		;;
+
+	x) fixImportMainBuildXML
+		;;
+
+	z) getTargets
 		;;
 
     esac
