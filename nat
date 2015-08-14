@@ -493,7 +493,7 @@ YES_CAPS=$(echo ${YES_STRING}|tr [:lower:] [:upper:])
 NO_CAPS=$(echo ${NO_STRING}|tr [:lower:] [:upper:])
 
 function showHelp {
-	echo -e "\nnat.sh CLI Options:\n\n\t-h\tShow Help\n\t-c\tCheck current directory for missing targets\n\t-u\tUpdate nat.sh\n\t-f\tNew Ant Target Entry in ./$file (@param filename)\n\t-F\tNew $file (new Folder)"
+	echo -e "\nnat.sh CLI Options:\n\n\t-h\tShow Help\n\t-c\tCheck current directory for missing targets\n\t-u\tUpdate nat.sh\n\t-f\tNew Ant Target Entry in ./$file (@param filename)\n\t-F\tNew $file (new Folder)\n\t-z\tGet a list of ant targets and their respective filenames, git messages and create a results.csv for Lance"
 }
 
 ###############################################
